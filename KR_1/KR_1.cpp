@@ -11,7 +11,6 @@
 
 using namespace std;
 
-// ==================== ЛЕКСИЧЕСКИЙ АНАЛИЗАТОР ====================
 enum TokClass { TK_KW, TK_ID, TK_NUM, TK_OP, TK_SEP, TK_EOF };
 
 struct Token {
@@ -107,7 +106,6 @@ public:
     }
 };
 
-// ==================== УЗЕЛ СИНТАКСИЧЕСКОГО ДЕРЕВА ====================
 enum NodeType {
     NT_Unknown, NT_Program, NT_StmtList, NT_Stmt,
     NT_FuncDef, NT_FuncCall, NT_ParamList, NT_Block,
@@ -160,7 +158,6 @@ private:
     }
 };
 
-// ==================== ТАБЛИЦА СИМВОЛОВ ====================
 struct SymbolEntry {
     string name, type;
     bool isFunction, isDefined, isUsed;
@@ -218,9 +215,8 @@ public:
     }
 };
 
-// ==================== ГЕНЕРАТОР ОБЪЕКТНОГО КОДА ====================
 class CodeGenerator {
-    SymbolTable* symTable;  // ← ДОБАВЛЕНО: ссылка на таблицу символов
+    SymbolTable* symTable;  
     vector<string> code, dataDecls;
     map<string, bool> declared;
     int tempCnt;
@@ -231,7 +227,6 @@ class CodeGenerator {
     bool semanticError;
 
 public:
-    // ← ИЗМЕНЕНО: добавлен параметр symTable
     CodeGenerator(SymbolTable* st) : symTable(st), tempCnt(0), labelCounter(0), curFunc("main"), entryFunction("main"), semanticError(false) {}
 
     bool hasSemanticError() const { return semanticError; }
@@ -551,14 +546,11 @@ private:
 
         string vname = varName(left->value);
 
-        // === СЕМАНТИЧЕСКАЯ ПРОВЕРКА 2: объявляем переменную, если нужно ===
         if (declared.find(vname) == declared.end()) {
-            // Проверяем, не является ли это параметром функции
             if (currentParams.find(left->value) == currentParams.end()) {
                 emitData(vname + " DW 0  ; variable");
                 declared[vname] = true;
 
-                // === ИСПРАВЛЕНО: добавляем в таблицу символов ТОЛЬКО если ещё нет ===
                 if (!symTable->findSymbol(left->value)) {
                     symTable->addSymbol(left->value, "int", false, {}, line);
                 }
@@ -710,7 +702,6 @@ private:
     }
 };
 
-// ==================== ПАРСЕР ====================
 class ExtendedPrecedenceParser {
     vector<Token> tokens;
     vector<pair<string, vector<string>>> rules;
@@ -733,7 +724,6 @@ public:
     }
     ~ExtendedPrecedenceParser() { delete symTable; delete syntaxTreeRoot; delete codeGen; }
 
-    // ← ДОБАВЛЕНО: геттер для codeGen
     CodeGenerator* getCodeGenerator() { return codeGen; }
 
     void initRules() {
@@ -1035,7 +1025,6 @@ int main() {
     ExtendedPrecedenceParser parser(tokens);
     cout << "\nСИНТАКСИЧЕСКИЙ АНАЛИЗ (расширенное предшествование):\n";
     bool success = parser.parse();
-    // ← ИСПРАВЛЕНО: success вместо syntaxSuccess, и getCodeGenerator() вместо codeGen
     if (success && parser.getCodeGenerator()->hasSemanticError()) {
         cerr << "\n[ОШИБКА] Обнаружены семантические ошибки. Компиляция прервана.\n";
         return 2;
