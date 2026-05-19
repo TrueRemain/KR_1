@@ -1,0 +1,5 @@
+def calc():
+begin
+    x = input();
+    print(y + 1);
+end;
