@@ -1,5 +1,12 @@
-def calc():
+def conditional():
 begin
     x = input();
-    print(x + 1);
+    if x > 0:
+    begin
+        print(1);
+    end;
+    else
+    begin
+        print(0);
+    end;
 end;

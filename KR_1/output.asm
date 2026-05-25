@@ -10,31 +10,42 @@ CODE SEGMENT
 
 ; === ??????? ????????? ===
 
-; === ???????: calc ===
-calc PROC
+; === ???????: conditional ===
+conditional PROC
         PUSH BP
         MOV BP, SP
         CALL ReadNumber
         MOV [x], AX
-    ; print
         MOV AX, [x]
         PUSH AX
-        MOV AX, 1
+        MOV AX, 0
         POP BX
-        ADD AX, BX
+        CMP BX, AX
+        JLE L1
+    ; print
+        MOV AX, 1
         PUSH AX
         CALL PrintNumber
         POP AX
 
-_epilogue_calc:
+        JMP L0
+L1:
+    ; print
+        MOV AX, 0
+        PUSH AX
+        CALL PrintNumber
+        POP AX
+
+L0:
+_epilogue_conditional:
         POP BP
         RET
-calc ENDP
+conditional ENDP
 START:
         MOV AX, DATA
         MOV DS, AX
 
-        CALL calc
+        CALL conditional
 
         MOV AH, 08h
         INT 21h

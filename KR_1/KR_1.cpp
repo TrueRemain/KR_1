@@ -416,7 +416,7 @@ private:
             if (n->type == NT_FuncDef) {
                 functions.push_back(n);
             }
-            else if (n->type == NT_StmtList || n->type == NT_Block) {
+            if (n->type == NT_StmtList || n->type == NT_Block || n->type == NT_FuncDef) {
                 for (auto* ch : n->children) collect(ch);
             }
             else if (n->type != NT_Program) {
@@ -432,6 +432,12 @@ private:
 
         if (!functions.empty()) {
             entryFunction = varName(functions[0]->value);
+            for (auto* func : functions) {
+                if (func->value == "main") {
+                    entryFunction = varName(func->value);
+                    break;
+                }
+            }
         }
     }
 
@@ -450,6 +456,9 @@ private:
             TreeNode* child = node->children[i];
             if (child && child->type == NT_Id) {
                 currentParams[child->value] = paramOffset;
+                if (!symTable->findSymbol(child->value)) {
+                    symTable->addSymbol(child->value, "int", false, {}, child->line);
+                }
                 paramOffset += 2;
             }
             else break;
@@ -506,15 +515,39 @@ private:
         string Lelse = node->children.size() >= 3 ? newLabel() : "";
 
         if (!node->children.empty()) {
-            generateExpr(node->children[0]);
-            emit("    CMP AX, 0", 1);
-        }
+            TreeNode* cond = node->children[0];
+            if (cond->type == NT_BinOp && (cond->value == "==" || cond->value == "!=" ||
+                cond->value == "<" || cond->value == ">" || cond->value == "<=" || cond->value == ">=")) {
+                generateExpr(cond->children[0]);
+                emit("    PUSH AX", 1);
+                generateExpr(cond->children[1]);
+                emit("    POP BX", 1);
+                emit("    CMP BX, AX", 1);
 
-        if (!Lelse.empty()) {
-            emit("    JE " + Lelse, 1);
-        }
-        else {
-            emit("    JE " + Lend, 1);
+                string op = cond->value;
+                if (!Lelse.empty()) {
+                    if (op == "==") emit("    JNE " + Lelse, 1);
+                    else if (op == "!=") emit("    JE " + Lelse, 1);
+                    else if (op == "<") emit("    JGE " + Lelse, 1);
+                    else if (op == ">") emit("    JLE " + Lelse, 1);
+                    else if (op == "<=") emit("    JG " + Lelse, 1);
+                    else if (op == ">=") emit("    JL " + Lelse, 1);
+                }
+                else {
+                    if (op == "==") emit("    JNE " + Lend, 1);
+                    else if (op == "!=") emit("    JE " + Lend, 1);
+                    else if (op == "<") emit("    JGE " + Lend, 1);
+                    else if (op == ">") emit("    JLE " + Lend, 1);
+                    else if (op == "<=") emit("    JG " + Lend, 1);
+                    else if (op == ">=") emit("    JL " + Lend, 1);
+                }
+            }
+            else {
+                generateExpr(cond);
+                emit("    CMP AX, 0", 1);
+                if (!Lelse.empty()) emit("    JE " + Lelse, 1);
+                else emit("    JE " + Lend, 1);
+            }
         }
 
         if (node->children.size() >= 2) {
@@ -563,8 +596,23 @@ private:
             cerr << "[СЕМАНТИКА] Предупреждение: неизвестный тип выражения (строка " << line << ")\n";
         }
 
-        generateExpr(right);
-        emit("    MOV [" + vname + "], AX", 1);
+        string op = node->value;
+        if (op == "=") {
+            generateExpr(right);
+            emit("    MOV [" + vname + "], AX", 1);
+        }
+        else {
+            emit("    MOV AX, [" + vname + "]", 1);  
+            emit("    PUSH AX", 1);
+            generateExpr(right);                      
+            emit("    POP BX", 1);                    
+            if (op == "+=") emit("    ADD AX, BX", 1);
+            else if (op == "-=") { emit("    XCHG AX, BX", 1); emit("    SUB AX, BX", 1); }
+            else if (op == "*=") emit("    IMUL BX", 1);
+            else if (op == "/=") { emit("    XCHG AX, BX", 1); emit("    CWD", 1); emit("    IDIV BX", 1); }
+            else if (op == "%=") { emit("    XCHG AX, BX", 1); emit("    CWD", 1); emit("    IDIV BX", 1); emit("    MOV AX, DX", 1); }
+            emit("    MOV [" + vname + "], AX", 1);
+        }
     }
 
     void generateExpr(TreeNode* node) {
@@ -736,23 +784,37 @@ public:
             {"StmtList", {"Assign", ";"}}, {"StmtList", {"Assign", ";", "StmtList"}},
             {"StmtList", {"IfStmt", ";"}}, {"StmtList", {"IfStmt", ";", "StmtList"}},
             {"StmtList", {"FuncDef", ";"}}, {"StmtList", {"FuncDef", ";", "StmtList"}},
+            {"StmtList", {"Expr", ";"}},                                     
+            {"StmtList", {"Expr", ";", "StmtList"}},
             {"StmtList", {"def", "id", "(", "Expr", ")", ":", "Block", ";"}},
             {"StmtList", {"def", "id", "(", "Expr", ")", ":", "Block", ";", "StmtList"}},
             {"StmtList", {"def", "id", "(", ")", ":", "Block", ";"}},
             {"StmtList", {"def", "id", "(", ")", ":", "Block", ";", "StmtList"}},
+            {"StmtList", {"if", "Expr", ":", "Block", ";", "ElsePart", ";"}},
             {"Stmt", {"Assign"}}, {"Stmt", {"PrintStmt"}}, {"Stmt", {"InputStmt"}},
             {"Stmt", {"ReturnStmt"}}, {"Stmt", {"FuncDef"}}, {"Stmt", {"IfStmt"}},
-            {"Assign", {"id", "=", "Expr"}}, {"PrintStmt", {"print", "(", "Expr", ")"}},
+            {"Stmt", {"Expr"}},
+            {"Assign", {"id", "=", "Expr"}}, 
+            {"Assign", {"id", "+=", "Expr"}},
+            {"Assign", {"id", "-=", "Expr"}},
+            {"Assign", {"id", "*=", "Expr"}},
+            {"Assign", {"id", "/=", "Expr"}},
+            {"Assign", {"id", "%=", "Expr"}},
+            {"PrintStmt", {"print", "(", "Expr", ")"}},
             {"ReturnStmt", {"return", "Expr"}},
             {"FuncDef", {"def", "id", "(", "ExprList", ")", ":", "Block"}},
             {"FuncDef", {"def", "id", "(", "Expr", ")", ":", "Block"}},
             {"Block", {"begin", "StmtList", "end"}},
-            {"IfStmt", {"if", "Expr", ":", "Block", "ElsePart"}}, {"IfStmt", {"if", "Expr", ":", "Block"}},
+            {"IfStmt", {"if", "Expr", ":", "Block"}},
+            {"IfStmt", {"if", "Expr", ":", "Block", ";", "ElsePart"}},
             {"ElsePart", {"else", "Block"}}, {"ExprList", {"Expr", ",", "ExprList"}}, {"ExprList", {"Expr"}},
             {"Expr", {"Expr", "+", "Expr"}}, {"Expr", {"Expr", "-", "Expr"}}, {"Expr", {"Expr", "*", "Expr"}},
             {"Expr", {"Expr", "/", "Expr"}}, {"Expr", {"Expr", "%", "Expr"}}, {"Expr", {"(", "Expr", ")"}},
+            {"Expr", {"Expr", "==", "Expr"}}, {"Expr", {"Expr", "!=", "Expr"}},
+            {"Expr", {"Expr", "<", "Expr"}}, {"Expr", {"Expr", ">", "Expr"}},
+            {"Expr", {"Expr", "<=", "Expr"}}, {"Expr", {"Expr", ">=", "Expr"}},
             {"Expr", {"id"}}, {"Expr", {"num"}}, {"Expr", {"id", "(", "ExprList", ")"}},
-            {"Expr", {"input", "(", ")"}}, {"Expr", {"id", "(", "Expr", ")"}}
+            {"Expr", {"input", "(", ")"}}, {"Expr", {"id", "(", ")"}}, {"Expr", {"id", "(", "Expr", ")"}}
         };
     }
 
@@ -762,6 +824,9 @@ public:
         auto add = [&](const string& a, const string& b, char rel) { precTable[{a, b}].insert(rel); };
         add("def", "id", '='); add("id", "(", '='); add("print", "(", '='); add("input", "(", '=');
         add("(", ")", '='); add(")", ":", '='); add(":", "begin", '<'); add("else", "begin", '<');
+
+        add("if", ":", '=');
+
         for (auto& s : { "id","num","def","if","begin","return","print","input" }) {
             add("#", s, '<'); add(";", s, '<'); add(":", s, '<'); add("(", s, '<'); add("begin", s, '<'); add(",", s, '<');
         }
@@ -769,29 +834,69 @@ public:
             add(op, "id", '<'); add(op, "num", '<'); add(op, "(", '<'); add(op, "input", '<');
         }
         for (auto& kw : { "return","if" }) { add(kw, "id", '<'); add(kw, "num", '<'); add(kw, "(", '<'); add(kw, "input", '<'); }
-        for (auto& op : { "=","+=","-=","*=","/=","%=" }) { add(op, "id", '<'); add(op, "num", '<'); add(op, "(", '<'); add(op, "input", '<'); }
+        for (auto& op : { "=","+=","-=","*=","/=","%=" }) { add(op, "id", '<'); add(op, "num", '<'); add(op, "(", '<'); add(op, "input", '<'); add(op, "+", '<'); add(op, "-", '<'); add(op, "*", '<'); add(op, "/", '<'); add(op, "%", '<');
+        }
         for (auto& low : { "+","-" }) for (auto& high : { "*","/","%" }) add(low, high, '<');
         add("id", "(", '<');
         for (auto& e : { "id","num",")","end" }) { add(e, ")", '>'); add(e, ";", '>'); add(e, ",", '>'); add(e, ":", '>'); add(e, "end", '>'); add(e, "#", '>'); }
-        add(";", "#", '>'); add(";", "end", '>'); add(")", ")", '>'); add(")", ";", '>'); add(")", ",", '>');
-        for (auto& op : { "+","-","*","/","%" }) { add(")", op, '>'); add(")", "=", '>'); add(")", ":", '>'); add(")", "end", '>'); add(")", "else", '>'); }
+        add(";", "#", '>'); add(";", "end", '>'); add(";", "else", '<'); add(")", ")", '>'); add(")", ";", '>'); add(")", ",", '>');
+        for (auto& op : { "+","-","*","/","%","=","+=","-=","*=","/=","%=" }) { add(")", op, '>'); add(")", ":", '>'); add(")", "end", '>'); add(")", "else", '>'); }
+        
+        for (auto& op : { "+","-","*","/","%","==","!=","<",">","<=",">=" }) {
+            add(op, ":", '>');
+        }
+        for (auto& op : { "+","-","*","/","%","==","!=","<",">","<=",">=" }) {
+            add(op, ";", '>');
+        }
+
+
         for (auto& op : { "+","-","*","/","%" }) {
             add("id", op, '>');
             add("num", op, '>');
             add(")", op, '>');
         }
-        add("id", "=", '<');
-        add("=", ";", '>');
+        for (auto& op : { "==","!=","<",">","<=",">=" }) {
+            add(op, "id", '<'); add(op, "num", '<'); add(op, "(", '<'); add(op, "input", '<');
+        }
+        for (auto& op : { "==","!=","<",">","<=",">=" }) {
+            add("id", op, '>');
+            add("num", op, '>');
+            add(")", op, '>');
+        }
+        for (auto& op : { "=","+=","-=","*=","/=","%=" }) {
+            add("id", op, '<');
+        }
+        for (auto& op : { "=","+=","-=","*=","/=","%=" }) {
+            add(op, ";", '>');
+            add(op, "end", '>');
+        }
         add("=", "end", '>');
         for (auto& high : { "*","/","%" }) for (auto& low : { "+","-" }) add(high, low, '>');
+        
         for (auto& op : { "+","-","*","/","%" }) add(op, op, '>');
         add("end", ";", '>'); add("end", "else", '>'); add("else", "begin", '<');
-        for (auto& kw : { "return","if","print","input" }) add(kw, ";", '>');
+        
+        for (auto& kw : { "return","if","print","input" }) add(kw, ";", '>'); add("return", ";", '>');
         add("return", "begin", '<'); add("if", "begin", '<');
         add("(", "(", '<'); for (auto& op : { "+","-","*","/","%","==","!=","<",">","<=",">=" }) add("(", op, '<');
+
+        for (auto& op : { "+","-","*","/","%","==","!=","<",">","<=",">=" }) add("if", op, '<');
+        for (auto& op : { "+","-","*","/","%","==","!=","<",">","<=",">=" }) add("return", op, '<');
+
+
+
         for (auto& op : { "+","-","*","/","%","==","!=","<",">","<=",">=" }) add(op, ")", '>');
         add("input", ")", '>'); add("begin", ";", '<'); add(":", ";", '<'); add("else", ";", '>'); add("begin", "end", '=');
-        add("Expr", ")", '>'); add(";", ";", '<'); add("#", "def", '<'); add("#", ";", '>'); add("#", "#", '=');
+        add("Expr", ")", '>'); add("Expr", ":", '>'); add(";", ";", '<'); add("#", "def", '<'); add("#", ";", '>'); add("#", "#", '=');
+
+        for (auto& arith : { "+","-","*","/","%" }) {
+            for (auto& cmp : { "==","!=","<",">","<=",">=" }) {
+                add(arith, cmp, '>');  
+                add(cmp, arith, '<'); 
+            }
+        }
+
+
     }
 
     void buildTriples() { LT.clear(); RT.clear(); RT.insert({ "(","Expr",")" }); RT.insert({ "id","(",")" }); }
@@ -844,6 +949,12 @@ public:
                 return op;
             }
             if (handle.size() == 3 && handle[0] == "(" && handle[2] == ")") return children.empty() ? new TreeNode(NT_Expr, "", "int", line) : children[0];
+            if (handle.size() == 3 && handle[0] == "id" && handle[1] == "(" && handle[2] == ")") {
+                string fn = (!children.empty() && children[0] && children[0]->type == NT_Id) ? children[0]->value : "unknown";
+                auto* call = new TreeNode(NT_FuncCall, fn, "int", line);
+                symTable->findSymbol(fn);
+                return call;
+            }
             if (handle.size() == 4 && handle[0] == "id" && handle[1] == "(" && handle[3] == ")") {
                 string fn = (!children.empty() && children[0] && children[0]->type == NT_Id) ? children[0]->value : "unknown";
                 auto* call = new TreeNode(NT_FuncCall, fn, "int", line);
@@ -875,8 +986,12 @@ public:
         if (lhs == "FuncDef" && handle.size() == 7 && handle[0] == "def") {
             string fn = handle.size() > 1 ? handle[1] : "unknown";
             auto* f = new TreeNode(NT_FuncDef, fn, "void", line);
+
+            
+
             if (children.size() >= 2) { f->addChild(children[0]); f->addChild(children[1]); }
-            symTable->addSymbol(fn, "void", true, {}, line); return f;
+            symTable->addSymbol(fn, "void", true, {}, line);
+            return f;
         }
         if (lhs == "FuncDef" && handle.size() == 6 && handle[0] == "def") {
             string fn = handle.size() > 1 ? handle[1] : "unknown";
@@ -893,13 +1008,16 @@ public:
             return ifs;
         }
 
-        if (lhs == "Assign" && handle.size() == 3 && handle[1] == "=") {
-            auto* assign = new TreeNode(NT_Assign, "=", "void", line);
-            if (children.size() >= 2) {
-                assign->addChild(children[0]);
-                assign->addChild(children[1]);
+        if (lhs == "Assign" && handle.size() == 3) {
+            string op = handle[1];
+            if (op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=") {
+                auto* assign = new TreeNode(NT_Assign, op, "void", line);
+                if (children.size() >= 2) {
+                    assign->addChild(children[0]);
+                    assign->addChild(children[1]);
+                }
+                return assign;
             }
-            return assign;
         }
 
         if (lhs == "StmtList") {
@@ -954,6 +1072,24 @@ public:
                 auto* sl = new TreeNode(NT_StmtList, "", "void", line);
                 sl->addChild(f);
                 if (restStmts) sl->addChild(restStmts);
+                return sl;
+            }
+
+            if (handle.size() == 7 && handle[0] == "if") {
+                auto* ifs = new TreeNode(NT_IfStmt, "if", "void", line);
+                if (children.size() >= 1 && children[0]) ifs->addChild(children[0]);  
+                if (children.size() >= 2 && children[1]) ifs->addChild(children[1]);  
+
+                if (children.size() >= 3 && children[2]) {
+                    TreeNode* elsePart = children[2];
+                    if (!elsePart->children.empty() && elsePart->children[0]) {
+                        ifs->addChild(elsePart->children[0]);  
+                        elsePart->children.clear();  
+                    }
+                }
+
+                auto* sl = new TreeNode(NT_StmtList, "", "void", line);
+                sl->addChild(ifs);
                 return sl;
             }
 
